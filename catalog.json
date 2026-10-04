@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-04T14:17:31.679Z",
+  "updated": "2026-10-04T19:52:02.631Z",
   "models": [
     {
       "id": "sc3",
@@ -40,6 +40,21 @@
       "animations": [],
       "triangles": 144916,
       "megabytes": 2.63,
+      "extensions": [
+        "EXT_meshopt_compression",
+        "KHR_mesh_quantization"
+      ]
+    },
+    {
+      "id": "untitled4_1",
+      "title": "untitled4_1",
+      "description": "",
+      "file": "models/untitled4_1.glb?v=c5d1dd76fa",
+      "thumbnail": "thumbs/untitled4_1-c5d1dd76fa.png",
+      "size": 1,
+      "animations": [],
+      "triangles": 325272,
+      "megabytes": 3.22,
       "extensions": [
         "EXT_meshopt_compression",
         "KHR_mesh_quantization"
