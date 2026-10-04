@@ -1,3 +1,6 @@
 node_modules/
 _site/
 .DS_Store
+# Added by the publish workflow from npm (see .github/workflows/catalog.yml)
+ar/vendor/mediapipe/vision_bundle.js
+ar/vendor/mediapipe/wasm/
