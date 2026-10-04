@@ -1,0 +1,66 @@
+# Every push to main: rebuild catalog.json + thumbnails from /models, save them,
+# and publish the library to GitHub Pages (CORS-enabled, so the web AR can read it).
+name: Publish model library
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install tools
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Build catalog and thumbnails
+        run: node tools/build-catalog.mjs
+
+      - name: Save catalog and thumbnails to the repository
+        run: |
+          git config user.name "model-library-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalog.json thumbs
+          if ! git diff --cached --quiet; then
+            git commit -m "Update catalog"
+            git push
+          fi
+
+      - name: Collect the public files
+        run: |
+          mkdir -p _site
+          cp -r catalog.json models thumbs index.html _site/
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
