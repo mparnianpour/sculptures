@@ -42,7 +42,7 @@ const ui = {
   back: $('back'), replace: $('replace'), sizeAr: $('size-ar'), hint: $('hint'), error: $('error'),
   frameNote: $('frame-note'), pickerRow: $('picker-row'), pickerAr: $('picker-ar'),
   next: $('next'), stepBack: $('step-back'), stepCount: $('step-count'), stepTitle: $('step-title'),
-  modelTitle: $('model-title'), modelDesc: $('model-desc'),
+  modelTitle: $('model-title'), modelDesc: $('model-desc'), modes: $('ar-modes'),
 };
 
 const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -122,13 +122,20 @@ function createRig(gltf) {
     mixer.clipAction(clip).setLoop(THREE.LoopRepeat, Infinity).play();
   }
 
+  // root → placement (table / wall) → scaler → lifter (visitor's height)
+  //   → pivot (visitor's rotation, about the sculpture's middle) → model
   const root = new THREE.Group();
   const placement = new THREE.Group();
   const scaler = new THREE.Group();
+  const lifter = new THREE.Group();
+  const pivot = new THREE.Group();
   root.add(placement);
   placement.add(scaler);
-  model.position.set(-cx, -minY, -cz);
-  scaler.add(model);
+  scaler.add(lifter);
+  lifter.add(pivot);
+  pivot.position.set(0, height / 2, 0);
+  model.position.set(-cx, -minY - height / 2, -cz);
+  pivot.add(model);
 
   const sun = new THREE.DirectionalLight(0xffffff, 2.0);
   const L = (height + diameter) * 1.4;
@@ -150,10 +157,27 @@ function createRig(gltf) {
   root.add(catcher);
 
   const tmpScale = new THREE.Vector3();
+  let liftWidths = 0;     // visitor's height change, in image widths
+  let liftModel = 0;      // the same, in model units
+
+  // The sun rises with the sculpture, so its shadow still lands on the surface below.
+  function applyPose() {
+    liftModel = liftWidths / (state.size / diameter);
+    lifter.position.y = liftModel;
+    sun.position.set(L * 0.35, L + liftModel, L * 0.45);
+    sun.target.position.set(0, height * 0.35 + liftModel, 0);
+  }
+
+  function setPose(lift, spin) {
+    liftWidths = lift;
+    pivot.quaternion.copy(spin);
+    applyPose();
+  }
 
   function layout() {
     const s = state.size / diameter;
     scaler.scale.setScalar(s);
+    applyPose();
     if (state.mode === 'table') {
       placement.rotation.set(Math.PI / 2, 0, 0);
       placement.position.set(0, 0, 0);
@@ -171,16 +195,17 @@ function createRig(gltf) {
     const ws = scaler.getWorldScale(tmpScale).x;
     const cam = sun.shadow.camera;
     const e = shadowExtent * ws;
-    if (Math.abs(cam.right - e) > e * 1e-4) {
+    const far = (shadowFar + Math.max(0, liftModel)) * ws;
+    if (Math.abs(cam.right - e) > e * 1e-4 || Math.abs(cam.far - far) > far * 1e-4) {
       cam.left = -e; cam.right = e; cam.top = e; cam.bottom = -e;
       cam.near = 0.01 * L * ws;
-      cam.far = shadowFar * ws;
+      cam.far = far;
       cam.updateProjectionMatrix();
     }
   }
 
   layout();
-  return { root, layout, update, height, diameter };
+  return { root, pivot, layout, update, setPose, height, diameter };
 }
 
 // ---------------------------------------------------------------------------
@@ -522,8 +547,10 @@ const anchor = {
   // The visitor's own adjustments (drag / twist), on top of where the image put it.
   // Kept in the image's frame, so later corrections from the image carry them along.
   offset: new THREE.Vector3(),  // image widths, along the floor (or table)
-  yaw: 0,                       // radians, around the vertical axis
+  lift: 0,                      // image widths, up from where the image put it
+  spin: new THREE.Quaternion(), // rotation about the sculpture's middle
 };
+const NO_SPIN = new THREE.Quaternion();
 anchor.group.visible = false;
 
 const floor = {
@@ -551,15 +578,14 @@ function poseFrom(detail) {
 const localUp = () => (state.mode === 'table' ? _upTable : _upWall);
 const _upTable = new THREE.Vector3(0, 0, 1);
 const _upWall = new THREE.Vector3(0, 1, 0);
-const _qYaw = new THREE.Quaternion();
 const _off = new THREE.Vector3();
 
 function applyAnchor() {
   _off.copy(anchor.offset).multiplyScalar(anchor.scale).applyQuaternion(anchor.quat);
   anchor.group.position.copy(anchor.pos).add(_off);
-  _qYaw.setFromAxisAngle(localUp(), anchor.yaw);
-  anchor.group.quaternion.copy(anchor.quat).multiply(_qYaw);
+  anchor.group.quaternion.copy(anchor.quat);
   anchor.group.scale.setScalar(anchor.scale);
+  if (state.rig) state.rig.setPose(anchor.lift, anchor.spin);
 }
 
 function averagePoses(list) {
@@ -616,8 +642,11 @@ function resetPlacement() {
   anchor.placed = false;
   anchor.samples = [];
   anchor.offset.set(0, 0, 0);
-  anchor.yaw = 0;
+  anchor.lift = 0;
+  anchor.spin.identity();
+  if (state.rig) state.rig.setPose(0, NO_SPIN);
   gestures.cancel();
+  ui.modes.hidden = true;
   anchor.group.visible = false;
   ui.replace.hidden = true;
   if (state.worldTracking && !floor.ready) setHint('Point at the floor and move your phone slowly');
@@ -637,12 +666,13 @@ function placeFromSamples() {
   applyAnchor();
   anchor.group.visible = true;
   ui.replace.hidden = false;
+  ui.modes.hidden = false;
   if (floor.ring) floor.ring.visible = false;
   window.__placed = { altitude: floor.altitude, mode, scale: anchor.scale };
   setHint(mode === 'table' ? 'Placed on the table. Walk around it.' : 'Placed in front of the wall. Walk around it.');
   clearTimeout(placeFromSamples.t);
   placeFromSamples.t = setTimeout(() => {
-    setHint('Drag to move it. Two fingers to turn or resize.');
+    setHint('Drag to move it, pinch to resize. Height and Rotate are below.');
     placeFromSamples.t = setTimeout(() => setHint(null), 4000);
   }, 2500);
 }
@@ -661,7 +691,8 @@ function onImagePose(detail, camera) {
       anchor.pos.copy(p.pos); anchor.quat.copy(p.quat); anchor.scale = p.scale;
       anchor.placed = true;
       anchor.group.visible = true;
-      setHint('Drag to move it, Shift-drag to turn, scroll to resize.');
+      ui.modes.hidden = false;
+      setHint('Drag to move it, scroll to resize. Height and Rotate are below.');
       clearTimeout(placeFromSamples.t);
       placeFromSamples.t = setTimeout(() => setHint(null), 4000);
     } else {
@@ -728,10 +759,12 @@ function updateFloor(camera) {
 }
 
 // ---------------------------------------------------------------------------
-// Moving the sculpture in the camera view
-//   one finger: slide it along the floor or table (its height stays locked)
-//   two fingers: twist to turn it, pinch to resize it
-//   mouse: drag to move, Shift-drag to turn, scroll to resize
+// Moving the sculpture in the camera view. One finger does what the chosen
+// mode says; two fingers always twist to turn it and pinch to resize it.
+//   Move:   slide it along the floor or table
+//   Height: raise or lower it
+//   Rotate: turn it any way (sideways drag spins, up-down drag tips it)
+// Mouse: the same, plus Shift-drag to rotate and the wheel to resize.
 // ---------------------------------------------------------------------------
 const gestures = (() => {
   const pointers = new Map();          // pointerId → { x, y }
@@ -741,29 +774,75 @@ const gestures = (() => {
   const hit = new THREE.Vector3();
   const startHit = new THREE.Vector3();
   const startOffset = new THREE.Vector3();
-  const n = new THREE.Vector3();
+  const up = new THREE.Vector3();
+  const v = new THREE.Vector3();
+  const centre = new THREE.Vector3();
+  const pq = new THREE.Quaternion();
+  const dq = new THREE.Quaternion();
   const inv = new THREE.Quaternion();
   const MAX_OFFSET = 40;               // image widths
-  let mode = null;                     // 'drag' | 'twist' | 'turn'
-  let startYaw = 0, startSize = 1, startDist = 1, lastAngle = 0, twist = 0, startX = 0;
+  const ROTATE_SPEED = 0.01;           // radians per pixel
+  let tool = 'move';                   // the mode buttons
+  let mode = null;                     // current gesture: 'move' | 'lift' | 'rotate' | 'twist'
+  let startLift = 0, startSize = 1, startDist = 1, lastAngle = 0, lastX = 0, lastY = 0;
 
   const active = () => state.running && anchor.placed;
   const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
   const sizeLimits = () => [Number(ui.sizeAr.min) || 0.3, Number(ui.sizeAr.max) || 3];
+  const camera = () => XR8.Threejs.xrScene().camera;
 
-  // Where a screen point meets the level plane through the sculpture.
-  function planeHit(x, y, out) {
-    const { camera } = XR8.Threejs.xrScene();
-    camera.updateMatrixWorld();
-    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+  // Lowest: the sculpture's base on the floor. Highest: about 4 m up. (Image widths.)
+  function liftLimits() {
+    if (!state.worldTracking) return [-10, 10];
+    const base = state.mode === 'wall' && state.rig ? 0.5 * state.size * state.rig.height / state.rig.diameter : 0;
+    const lo = base - Math.max(0, anchor.pos.y) / anchor.scale;
+    return [Math.min(lo, 0), Math.max(4 / anchor.scale, 1)];
+  }
+
+  // World "up" for the sculpture, and the world point it sits on.
+  function frame() {
+    up.copy(localUp()).applyQuaternion(anchor.quat).normalize();
+    centre.copy(anchor.group.position).addScaledVector(up, anchor.lift * anchor.scale);
+  }
+
+  function rayAt(x, y) {
+    const cam = camera();
+    cam.updateMatrixWorld();
+    cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
     const r = ui.xrCanvas.getBoundingClientRect();
     ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-    n.copy(localUp()).applyQuaternion(anchor.quat);
-    plane.setFromNormalAndCoplanarPoint(n, anchor.group.position);
-    if (!ray.ray.intersectPlane(plane, out)) return null;
-    if (out.distanceTo(ray.ray.origin) > 25 * Math.max(anchor.scale, 0.2)) return null;   // near the horizon
+    ray.setFromCamera(ndc, cam);
+    return ray.ray;
+  }
+
+  function hitPlane(x, y, out) {
+    const r = rayAt(x, y);
+    if (!r.intersectPlane(plane, out)) return null;
+    if (out.distanceTo(r.origin) > 25 * Math.max(anchor.scale, 0.2)) return null;   // near the horizon
     return out;
+  }
+
+  // Level plane through the sculpture (Move), or an upright plane facing the camera (Height).
+  function setPlane(kind) {
+    frame();
+    if (kind === 'move') {
+      plane.setFromNormalAndCoplanarPoint(up, centre);
+    } else {
+      camera().getWorldDirection(v);
+      v.addScaledVector(up, -v.dot(up));
+      if (v.lengthSq() < 1e-6) { v.set(0, 1, 0).applyQuaternion(camera().quaternion); v.addScaledVector(up, -v.dot(up)); }
+      plane.setFromNormalAndCoplanarPoint(v.normalize(), centre);
+    }
+  }
+
+  // Turn the sculpture about a world axis through its middle.
+  function rotateWorld(axis, angle) {
+    if (!state.rig || !angle) return;
+    state.rig.pivot.parent.updateWorldMatrix(true, false);
+    state.rig.pivot.parent.getWorldQuaternion(pq);
+    v.copy(axis).applyQuaternion(inv.copy(pq).invert()).normalize();
+    dq.setFromAxisAngle(v, angle);
+    anchor.spin.premultiply(dq).normalize();
   }
 
   function begin(e) {
@@ -773,15 +852,20 @@ const gestures = (() => {
       const [a, b] = list;
       startDist = Math.max(10, Math.hypot(b.x - a.x, b.y - a.y));
       lastAngle = Math.atan2(b.y - a.y, b.x - a.x);
-      twist = 0;
-      startYaw = anchor.yaw;
       startSize = state.size;
       mode = 'twist';
-    } else if (list.length === 1) {
-      const p = list[0];
-      if (e && e.shiftKey) { startX = p.x; startYaw = anchor.yaw; mode = 'turn'; }
-      else if (planeHit(p.x, p.y, startHit)) { startOffset.copy(anchor.offset); mode = 'drag'; }
+      return;
     }
+    if (list.length !== 1) return;
+    const p = list[0];
+    const want = e && e.shiftKey ? 'rotate' : tool;
+    lastX = p.x; lastY = p.y;
+    if (want === 'rotate') { mode = 'rotate'; return; }
+    setPlane(want);
+    if (!hitPlane(p.x, p.y, startHit)) return;
+    startOffset.copy(anchor.offset);
+    startLift = anchor.lift;
+    mode = want;
   }
 
   function onDown(e) {
@@ -797,28 +881,37 @@ const gestures = (() => {
     if (!p) return;
     p.x = e.clientX; p.y = e.clientY;
     if (!active() || !mode) return;
-    if (mode === 'drag') {
-      if (!planeHit(p.x, p.y, hit)) return;
-      // World movement of the finger → image frame, along the floor only.
+    if (mode === 'move') {
+      if (!hitPlane(p.x, p.y, hit)) return;
+      // Finger movement in the world → the image's frame, along the floor only.
       hit.sub(startHit).multiplyScalar(1 / anchor.scale).applyQuaternion(inv.copy(anchor.quat).invert());
-      const up = localUp();
-      hit.addScaledVector(up, -hit.dot(up));
+      const lu = localUp();
+      hit.addScaledVector(lu, -hit.dot(lu));
       anchor.offset.copy(startOffset).add(hit);
       if (anchor.offset.length() > MAX_OFFSET) anchor.offset.setLength(MAX_OFFSET);
+    } else if (mode === 'lift') {
+      if (!hitPlane(p.x, p.y, hit)) return;
+      const [lo, hi] = liftLimits();
+      anchor.lift = THREE.MathUtils.clamp(startLift + hit.sub(startHit).dot(up) / anchor.scale, lo, hi);
+    } else if (mode === 'rotate') {
+      frame();
+      const dx = p.x - lastX, dy = p.y - lastY;
+      lastX = p.x; lastY = p.y;
+      rotateWorld(up, dx * ROTATE_SPEED);                                   // sideways: spin
+      v.set(1, 0, 0).applyQuaternion(camera().quaternion);                  // up-down: tip towards you
+      rotateWorld(v.addScaledVector(up, -v.dot(up)).normalize(), dy * ROTATE_SPEED);
     } else if (mode === 'twist' && pointers.size >= 2) {
       const [a, b] = [...pointers.values()];
       const angle = Math.atan2(b.y - a.y, b.x - a.x);
-      twist += wrap(angle - lastAngle);
+      frame();
+      rotateWorld(up, -wrap(angle - lastAngle));   // clockwise on screen turns it clockwise
       lastAngle = angle;
-      anchor.yaw = startYaw - twist;   // clockwise on screen turns it clockwise
       const dist = Math.max(10, Math.hypot(b.x - a.x, b.y - a.y));
       const [lo, hi] = sizeLimits();
       setSize(THREE.MathUtils.clamp(startSize * dist / startDist, lo, hi));
-    } else if (mode === 'turn') {
-      anchor.yaw = startYaw + (p.x - startX) * 0.01;
     }
     applyAnchor();
-    window.__moved = { offset: anchor.offset.toArray(), yaw: anchor.yaw, size: state.size };
+    window.__moved = { offset: anchor.offset.toArray(), lift: anchor.lift, spin: anchor.spin.toArray(), size: state.size };
   }
 
   function onUp(e) {
@@ -833,6 +926,25 @@ const gestures = (() => {
     setSize(THREE.MathUtils.clamp(state.size * Math.exp(-e.deltaY * 0.0015), lo, hi));
   }
 
+  const TOOL_HINTS = {
+    move: 'Drag to slide it along the floor',
+    lift: 'Drag up or down to raise or lower it',
+    rotate: 'Drag to turn it any way',
+  };
+  function setTool(name, announce = true) {
+    tool = name;
+    for (const b of ui.modes.querySelectorAll('[data-tool]')) b.setAttribute('aria-checked', String(b.dataset.tool === name));
+    if (announce && active()) {
+      setHint(TOOL_HINTS[name]);
+      clearTimeout(setTool.t);
+      setTool.t = setTimeout(() => setHint(null), 2500);
+    }
+  }
+  ui.modes.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tool]');
+    if (b) setTool(b.dataset.tool);
+  });
+
   ui.xrCanvas.addEventListener('pointerdown', onDown);
   ui.xrCanvas.addEventListener('pointermove', onMove);
   ui.xrCanvas.addEventListener('pointerup', onUp);
@@ -840,7 +952,7 @@ const gestures = (() => {
   ui.xrCanvas.addEventListener('lostpointercapture', onUp);
   ui.xrCanvas.addEventListener('wheel', onWheel, { passive: false });
 
-  return { cancel() { pointers.clear(); mode = null; } };
+  return { cancel() { pointers.clear(); mode = null; }, setTool };
 })();
 
 // ---------------------------------------------------------------------------
@@ -1229,6 +1341,8 @@ async function selectModel(id) {
   if (parent) parent.add(rig.root);
   else if (!state.running) preview.attach(rig.root);
   else anchor.group.add(rig.root);
+  if (state.running && anchor.placed) rig.setPose(anchor.lift, anchor.spin);
+  else rig.setPose(0, NO_SPIN);
   rig.layout();
   preview.frame();
   markSelected(entry.id, false);

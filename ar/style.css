@@ -447,6 +447,38 @@ body[data-state="ar"] { background: #000; overflow: hidden; }
   align-items: center;
 }
 
+/* What one-finger dragging does: Move / Height / Rotate */
+.ar-modes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(20, 22, 25, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.ar-modes button {
+  appearance: none;
+  border: 0;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  min-height: 40px;
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+
+.ar-modes button[aria-checked="true"] {
+  background: #fff;
+  color: #14161a;
+}
+
+.ar-modes button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
 .slider.compact {
   grid-template-columns: auto 1fr;
   padding: 0 16px;

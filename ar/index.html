@@ -88,6 +88,11 @@
   <section class="ar-ui" id="ar-ui" aria-label="Camera controls" hidden>
       <p class="hint" id="hint">Point your camera at your image</p>
       <div class="picker-ar" id="picker-ar" role="listbox" aria-label="Sculptures" hidden></div>
+      <div class="ar-modes" id="ar-modes" role="radiogroup" aria-label="What dragging does" hidden>
+        <button type="button" role="radio" data-tool="move" aria-checked="true">Move</button>
+        <button type="button" role="radio" data-tool="lift" aria-checked="false">Height</button>
+        <button type="button" role="radio" data-tool="rotate" aria-checked="false">Rotate</button>
+      </div>
       <div class="ar-bar">
         <button class="button ghost" id="back">Change image</button>
         <button class="button ghost" id="replace" hidden>Re-place</button>
