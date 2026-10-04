@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { DRACOLoader } from './vendor/DRACOLoader.js';
-import { MeshoptDecoder } from './vendor/meshopt_decoder.module.js';
-import { RoomEnvironment } from './vendor/RoomEnvironment.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // 8th Wall's three.js module looks for a global THREE.
 window.THREE = THREE;
@@ -12,8 +12,17 @@ window.THREE = THREE;
 // ---------------------------------------------------------------------------
 // The sculpture list comes from your model library (config.json → catalogUrl).
 // If that's empty or unreachable, this built-in list is used instead.
+// File locations differ between the itch.io build (lib/, model/) and the GitHub
+// Pages copy (vendor/, ../models/); a copy can override them in index.html with
+// window.SCULPTURE_PATHS, so this file is identical in both.
+const PATHS = {
+  draco: './lib/three/examples/jsm/libs/draco/gltf/',
+  builtInModel: 'model/sc3.glb',
+  builtInThumb: 'model/sc3.png',
+  ...(window.SCULPTURE_PATHS || {}),
+};
 const BUILT_IN_CATALOG = {
-  models: [{ id: 'sc3', title: 'sc3', file: '../models/sc3.glb', thumbnail: '../thumbs/sc3-6f377de18f.png', size: 1 }],
+  models: [{ id: 'sc3', title: 'sc3', file: PATHS.builtInModel, thumbnail: PATHS.builtInThumb, size: 1 }],
 };
 const MAX_PIXEL_RATIO = 2;
 const PLACE_SAMPLES = 6;          // image poses averaged before the sculpture is placed
@@ -29,13 +38,18 @@ const DEBUG = new URLSearchParams(location.search).has('debug');
 const $ = (id) => document.getElementById(id);
 const ui = {
   setup: $('setup'), ar: $('ar'), arUi: $('ar-ui'), xrCanvas: $('xr-canvas'), preview: $('preview'), status: $('status'),
-  file: $('file'), chooseText: $('choose-text'), start: $('start'), back: $('back'), replace: $('replace'),
-  size: $('size'), sizeAr: $('size-ar'), sizeOut: $('size-out'), hint: $('hint'), error: $('error'),
-  frameNote: $('frame-note'), picker: $('picker'), pickerRow: $('picker-row'),
-  pickerAr: $('picker-ar'),
+  file: $('file'), chooseLabel: $('choose-label'), chooseText: $('choose-text'), start: $('start'),
+  back: $('back'), replace: $('replace'), sizeAr: $('size-ar'), hint: $('hint'), error: $('error'),
+  frameNote: $('frame-note'), pickerRow: $('picker-row'), pickerAr: $('picker-ar'),
+  next: $('next'), stepBack: $('step-back'), stepCount: $('step-count'), stepTitle: $('step-title'),
+  modelTitle: $('model-title'), modelDesc: $('model-desc'),
 };
 
+const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 const state = {
+  step: 'sculpture',    // setup step: 'sculpture' (1) or 'image' (2)
+  loading: false,       // a sculpture is downloading
   mode: 'table',
   size: 1,
   aspect: 0.75,         // tracked region: height / width
@@ -202,7 +216,10 @@ const preview = (() => {
 
   const clock = new THREE.Clock();
   const target = new THREE.Vector3();
+  const dir = new THREE.Vector3();
   let running = false;
+  let cardVisible = true;   // step 2 shows the image card; step 1 shows the sculpture alone
+  let orbit = 0.5;          // step 1: slow turntable angle (radians)
 
   function resize() {
     const w = ui.preview.clientWidth, h = ui.preview.clientHeight;
@@ -210,11 +227,28 @@ const preview = (() => {
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    frame();
   }
 
   function frame() {
     // Fit the image, the sculpture's footprint and its height (tall models need more room).
     const hgt = state.rig ? state.size * state.rig.height / state.rig.diameter : 0.3;
+    if (!cardVisible) {
+      // Sculpture alone: fit the cylinder it sweeps (footprint × height), so no side of it
+      // is cut off while it turns slowly.
+      const vf = THREE.MathUtils.degToRad(camera.fov) / 2;
+      const hf = Math.atan(Math.tan(vf) * camera.aspect);
+      const elev = 0.3;
+      const halfH = 0.5 * (hgt * Math.cos(elev) + state.size * Math.sin(elev));
+      const halfW = 0.5 * state.size;
+      const dist = 1.1 * Math.max(halfH / Math.tan(vf), halfW / Math.tan(hf)) + 0.5 * state.size * Math.cos(elev);
+      anchor.rotation.set(state.mode === 'table' ? -Math.PI / 2 : 0, 0, 0);
+      target.set(0, hgt * 0.5, 0);
+      dir.set(Math.sin(orbit) * Math.cos(elev), Math.sin(elev), Math.cos(orbit) * Math.cos(elev));
+      camera.position.copy(target).addScaledVector(dir, dist);
+      camera.lookAt(target);
+      return;
+    }
     const k = Math.max(1, state.aspect, state.size * 1.05, hgt * 1.15);
     if (state.mode === 'table') {
       anchor.rotation.set(-Math.PI / 2, 0, 0);
@@ -238,7 +272,16 @@ const preview = (() => {
     cardMat.transparent = false;
     cardMat.needsUpdate = true;
     card.scale.set(1, state.aspect, 1);
-    outline.visible = false;
+    hasImage = true;
+    setCardVisible(cardVisible);
+  }
+
+  let hasImage = false;
+  function setCardVisible(on) {
+    cardVisible = on;
+    card.visible = on && hasImage;
+    outline.visible = on && !hasImage;
+    outline.scale.set(1, state.aspect, 1);
     frame();
   }
 
@@ -248,6 +291,7 @@ const preview = (() => {
     if (!running) return;
     const dt = Math.min(clock.getDelta(), 0.1);
     if (state.rig) state.rig.update(dt);
+    if (!cardVisible && !REDUCED_MOTION) { orbit += dt * 0.3; frame(); }
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
   }
@@ -264,15 +308,26 @@ const preview = (() => {
   function stop() { running = false; }
 
   new ResizeObserver(resize).observe(ui.preview);
-  return { setImage, attach, start, stop, frame };
+  return { setImage, setCardVisible, attach, start, stop, frame };
 })();
 
 // ---------------------------------------------------------------------------
-// Status helpers
+// Status helpers. Each setup step keeps its own status line on the stage.
 // ---------------------------------------------------------------------------
-function setStatus(text, tone = '') {
-  ui.status.textContent = text;
-  ui.status.className = 'stage-status' + (tone ? ' ' + tone : '');
+const stepStatus = {
+  sculpture: { text: '', tone: '' },
+  image: { text: 'Choose an image to begin', tone: '' },
+};
+
+function renderStatus() {
+  const s = stepStatus[state.step];
+  ui.status.textContent = s.text;
+  ui.status.className = 'stage-status' + (s.tone ? ' ' + s.tone : '');
+}
+
+function setStatus(text, tone = '', step = 'image') {
+  stepStatus[step] = { text, tone };
+  if (step === state.step) renderStatus();
 }
 
 function showError(html) {
@@ -285,8 +340,17 @@ function setHint(text) {
   else ui.hint.classList.add('found');
 }
 
+// Step 1's button needs a loaded sculpture; step 2 shows "Choose image" as the
+// main action until there is a usable image, then "Start camera".
 function refreshStart() {
-  ui.start.disabled = !(state.target && state.rig && state.xrReady);
+  const rigReady = !!state.rig && !state.loading;
+  ui.next.disabled = !rigReady;
+  const ready = !!state.target;
+  ui.start.hidden = !ready;
+  ui.chooseLabel.classList.toggle('primary', !ready);
+  ui.chooseLabel.classList.toggle('secondary', ready);
+  ui.start.disabled = !(ready && rigReady && state.xrReady);
+  ui.start.textContent = state.xrReady ? 'Start camera' : 'Getting the camera ready…';
 }
 
 // ---------------------------------------------------------------------------
@@ -706,8 +770,7 @@ const arModule = {
   onCameraStatusChange: ({ status }) => {
     if (DEBUG) (window.__ev ||= []).push(['camera', status]);
     if (status === 'failed' || status === 'denied') {
-      stopAR();
-      showError(inFrame
+      abortAR(inFrame
         ? `The camera is blocked inside this frame. ${openInTabLink}, then allow the camera.`
         : 'Camera access is off. Allow the camera for this site in your browser settings, then try again.');
     }
@@ -715,8 +778,7 @@ const arModule = {
   onException: (err) => {
     console.error(err);
     const msg = String((err && err.message) || err || '');
-    stopAR();
-    showError((inFrame ? `${openInTabLink}. ` : '') + 'The camera view stopped: ' + msg.replace(/[<>]/g, ''));
+    abortAR((inFrame ? `${openInTabLink}. ` : '') + 'The camera view stopped: ' + msg.replace(/[<>]/g, ''));
   },
   listeners: [
     { event: 'reality.imageloading', process: ({ detail }) => { if (DEBUG) (window.__ev ||= []).push(['loading', JSON.stringify(detail).slice(0, 300)]); } },
@@ -768,6 +830,7 @@ function startAR() {
   }
 
   // Everything below runs inside the tap, so iOS can show its camera and motion prompts.
+  if (historyStep() !== 'ar') history.pushState({ step: 'ar' }, '', location.href);
   preview.stop();
   ui.setup.hidden = true;
   ui.ar.hidden = false;
@@ -796,6 +859,14 @@ function startAR() {
   });
 }
 
+// Camera failed: back to step 2 with the reason shown.
+function abortAR(html) {
+  stopAR();
+  showStep('image', { focus: false });
+  showError(html);
+  if (historyStep() === 'ar') history.back();   // drop the camera's history entry
+}
+
 function stopAR() {
   if (state.running) {
     state.running = false;
@@ -821,36 +892,79 @@ function stopAR() {
 // ---------------------------------------------------------------------------
 function setSize(value) {
   state.size = Number(value);
-  ui.size.value = value;
   ui.sizeAr.value = value;
-  ui.sizeOut.textContent = `${state.size.toFixed(state.size < 1 ? 2 : 1).replace(/\.?0+$/, '')}×`;
   if (state.rig) state.rig.layout();
   preview.frame();
 }
 
-ui.size.addEventListener('input', (e) => setSize(e.target.value));
-ui.sizeAr.addEventListener('input', (e) => setSize(e.target.value));
-document.querySelectorAll('input[name="mode"]').forEach((el) => {
-  el.addEventListener('change', (e) => {
-    state.mode = e.target.value;
-    if (state.rig) state.rig.layout();
-    preview.frame();
-  });
+// ---------------------------------------------------------------------------
+// Setup steps. Each step (and the camera view) is a browser history entry, so
+// the phone's back gesture goes camera → image → sculpture.
+// ---------------------------------------------------------------------------
+function showStep(step, { focus = true } = {}) {
+  state.step = step;
+  ui.setup.dataset.step = step;
+  const first = step === 'sculpture';
+  ui.stepCount.textContent = first ? 'Step 1 of 2' : 'Step 2 of 2';
+  ui.stepTitle.textContent = first ? 'Choose a sculpture' : 'Choose your image';
+  if (first) setMode('table');            // the camera view works out table or wall by itself
+  preview.setCardVisible(!first);
+  renderStatus();
+  refreshStart();
+  if (first) {
+    const sel = ui.pickerRow.querySelector('[aria-selected="true"]');
+    if (sel) sel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  window.scrollTo(0, 0);
+  if (focus) ui.stepTitle.focus({ preventScroll: true });
+}
+
+const historyStep = () => (history.state && history.state.step) || 'sculpture';
+
+function goToImageStep() {
+  if (!state.rig || state.loading) return;
+  history.pushState({ step: 'image' }, '', location.href);
+  showStep('image');
+}
+
+function goToSculptureStep() {
+  if (historyStep() === 'image') history.back();   // popstate shows step 1
+  else showStep('sculpture');
+}
+
+function leaveAR() {
+  if (historyStep() === 'ar') history.back();      // popstate stops the camera
+  else { stopAR(); showStep('image'); }
+}
+
+window.addEventListener('popstate', () => {
+  const step = historyStep();
+  if (step === 'ar') {
+    // Moving forward into a finished camera session: the camera needs a tap to start.
+    if (!state.running) { history.replaceState({ step: 'image' }, '', location.href); showStep('image'); }
+    return;
+  }
+  if (state.running) stopAR();
+  showStep(step);
 });
+
+ui.sizeAr.addEventListener('input', (e) => setSize(e.target.value));
 ui.file.addEventListener('change', () => {
   const file = ui.file.files && ui.file.files[0];
   if (file) prepareTarget(file);
   ui.file.value = '';
 });
+ui.next.addEventListener('click', goToImageStep);
+ui.stepBack.addEventListener('click', goToSculptureStep);
 ui.start.addEventListener('click', startAR);
-ui.back.addEventListener('click', stopAR);
+ui.back.addEventListener('click', leaveAR);
 ui.replace.addEventListener('click', resetPlacement);
 
 // ---------------------------------------------------------------------------
 // Sculpture library
 // ---------------------------------------------------------------------------
 const loader = new GLTFLoader();
-loader.setDRACOLoader(new DRACOLoader().setDecoderPath('./vendor/draco/'));
+loader.setDRACOLoader(new DRACOLoader().setDecoderPath(PATHS.draco));
 loader.setMeshoptDecoder(MeshoptDecoder);
 
 async function loadCatalog() {
@@ -921,9 +1035,7 @@ function pickerItem(m, compact) {
 function renderPickers() {
   ui.pickerRow.replaceChildren(...state.models.map((m) => pickerItem(m, false)));
   ui.pickerAr.replaceChildren(...state.models.map((m) => pickerItem(m, true)));
-  const many = state.models.length > 1;
-  ui.picker.hidden = !many;
-  ui.pickerAr.hidden = !many;
+  ui.pickerAr.hidden = state.models.length < 2;
 }
 
 function markSelected(id, loading) {
@@ -937,17 +1049,21 @@ function markSelected(id, loading) {
 async function selectModel(id) {
   const entry = state.models.find((m) => m.id === id) || state.models[0];
   if (!entry) return;
+  ui.modelTitle.textContent = entry.title;
+  ui.modelDesc.textContent = entry.description || '';
   if (state.modelId === entry.id && state.rig) return;
   const token = ++state.loadToken;
   state.modelId = entry.id;
   markSelected(entry.id, true);
   const params = new URLSearchParams(location.search);
   params.set('model', entry.id);
-  history.replaceState(null, '', `${location.pathname}?${params}${location.hash}`);
+  history.replaceState(history.state, '', `${location.pathname}?${params}${location.hash}`);
 
   let rig = state.rigs.get(entry.id);
   if (!rig) {
-    if (!state.target) setStatus(`Loading ${entry.title}…`);
+    state.loading = true;
+    refreshStart();
+    setStatus(`Loading ${entry.title}…`, '', 'sculpture');
     if (state.running) setHint(`Loading ${entry.title}…`);
     try {
       const gltf = await loader.loadAsync(entry.file);
@@ -956,12 +1072,16 @@ async function selectModel(id) {
     } catch (err) {
       console.error(err);
       if (token !== state.loadToken) return;
+      state.loading = false;
       markSelected(entry.id, false);
-      setStatus(`${entry.title} failed to load. Choose another sculpture or reload the page.`, 'warn');
+      setStatus(`${entry.title} failed to load. Choose another sculpture or reload the page.`, 'warn', 'sculpture');
+      if (state.running) setHint(`${entry.title} failed to load`);
+      refreshStart();
       return;
     }
   }
   if (token !== state.loadToken) return;
+  state.loading = false;
 
   // Swap it in wherever the current sculpture is (preview or camera view).
   const parent = state.rig ? state.rig.root.parent : null;
@@ -975,17 +1095,20 @@ async function selectModel(id) {
   rig.layout();
   preview.frame();
   markSelected(entry.id, false);
+  setStatus('', '', 'sculpture');
   if (state.running && anchor.placed) { setHint(entry.title); clearTimeout(selectModel.t); selectModel.t = setTimeout(() => setHint(null), 1500); }
   else if (state.running) resetPlacement();
-  if (!state.target && !state.running) setStatus('Choose an image to begin');
   refreshStart();
 }
 
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+// A reload keeps the step the visitor was on (the camera view comes back as step 2).
+if (historyStep() === 'ar') history.replaceState({ step: 'image' }, '', location.href);
+showStep(historyStep(), { focus: false });
 preview.start();
-setStatus('Loading the sculptures…');
+setStatus('Loading the sculptures…', '', 'sculpture');
 loadCatalog().then(({ models, source }) => {
   state.models = models;
   window.__catalog = { source, count: models.length };

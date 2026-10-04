@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Sculpture on your image</title>
-  <meta name="description" content="Choose any image, point your phone at it, and the sculpture appears on top of it. Walk around it to see every side.">
+  <meta name="description" content="Choose a sculpture, choose any image, point your phone at it, and the sculpture appears on top of it. Walk around it to see every side.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -12,58 +12,72 @@
   <!-- 8th Wall engine (Niantic Spatial): world tracking + image targets -->
   <script src="./vendor/xr.js" async data-preload-chunks="slam"></script>
   <script src="./vendor/xrextras.js"></script>
+  <!-- This copy keeps its libraries in vendor/ and the fallback model in ../models/. -->
+  <script>
+    window.SCULPTURE_PATHS = {
+      draco: './vendor/draco/',
+      builtInModel: '../models/sc3.glb',
+      builtInThumb: '../thumbs/sc3-6f377de18f.png',
+    };
+  </script>
   <script type="importmap">
     {
       "imports": {
-        "three": "./vendor/three.module.js"
+        "three": "./vendor/three.module.js",
+        "three/addons/loaders/GLTFLoader.js": "./vendor/GLTFLoader.js",
+        "three/addons/loaders/DRACOLoader.js": "./vendor/DRACOLoader.js",
+        "three/addons/libs/meshopt_decoder.module.js": "./vendor/meshopt_decoder.module.js",
+        "three/addons/environments/RoomEnvironment.js": "./vendor/RoomEnvironment.js"
       }
     }
   </script>
 </head>
 <body data-state="setup">
 
-  <main class="setup" id="setup">
-    <header class="intro">
-      <h1>Put a sculpture on any image</h1>
-      <p>Choose a photo or print with plenty of detail. Point your phone at the floor for a moment, then at the image: the sculpture lands on it and stays at the same height while you walk all the way around it.</p>
+  <!-- Two steps, one phone screen each: 1. sculpture, 2. image. -->
+  <main class="setup" id="setup" data-step="sculpture">
+    <header class="step-head">
+      <div class="step-row">
+        <button class="back-link" id="step-back" type="button" data-only="image">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Sculpture</span>
+        </button>
+        <p class="step-count" id="step-count">Step 1 of 2</p>
+      </div>
+      <h1 id="step-title" tabindex="-1">Choose a sculpture</h1>
+      <p class="step-lede" data-only="sculpture">It will stand on an image you choose next.</p>
+      <p class="step-lede" data-only="image">A photo or print with lots of detail works best. In the camera view, point at the floor first, then at the image.</p>
     </header>
 
-    <figure class="stage" id="stage" aria-label="Preview of the sculpture on your image">
+    <figure class="stage" id="stage" aria-label="Preview">
       <canvas id="preview"></canvas>
-      <figcaption class="stage-status" id="status" role="status" aria-live="polite">Loading the sculpture…</figcaption>
+      <figcaption class="stage-status" id="status" role="status" aria-live="polite">Loading the sculptures…</figcaption>
     </figure>
 
-    <section class="picker" id="picker" aria-label="Sculptures" hidden>
-      <p class="picker-label" id="picker-label">Sculpture</p>
-      <div class="picker-row" id="picker-row" role="listbox" aria-labelledby="picker-label"></div>
+    <!-- Step 1: sculpture -->
+    <section class="step-body" data-only="sculpture" aria-label="Sculptures">
+      <p class="model-caption" id="model-caption"><strong id="model-title"></strong> <span id="model-desc"></span></p>
+      <div class="picker-row" id="picker-row" role="listbox" aria-label="Sculptures"></div>
     </section>
 
-    <section class="controls" aria-label="Settings">
-      <label class="button secondary file" id="choose-label">
+    <!-- Step 2: image -->
+    <section class="step-body" data-only="image" aria-label="Your image">
+      <p class="error" id="error" role="alert" hidden></p>
+      <p class="note" id="frame-note" hidden></p>
+      <p class="note">Your image stays on your phone; it is never uploaded. Works in Safari on iPhone and Chrome on Android. Allow the camera and motion sensors when asked.</p>
+    </section>
+
+    <footer class="step-foot">
+      <button class="button primary" id="next" type="button" data-only="sculpture" disabled>Use this sculpture</button>
+
+      <label class="button primary file" id="choose-label" data-only="image">
         <input type="file" id="file" accept="image/*">
         <span id="choose-text">Choose image</span>
       </label>
+      <button class="button primary" id="start" type="button" data-only="image" hidden disabled>Start camera</button>
 
-      <fieldset class="segmented" id="mode">
-        <legend>The image is</legend>
-        <label><input type="radio" name="mode" value="table" checked><span>Flat on a table</span></label>
-        <label><input type="radio" name="mode" value="wall"><span>On a wall</span></label>
-      </fieldset>
-
-      <label class="slider">
-        <span class="slider-label">Size</span>
-        <input type="range" id="size" min="0.3" max="3" step="0.05" value="1">
-        <output id="size-out" for="size">1×</output>
-      </label>
-
-      <button class="button primary" id="start" disabled>Start camera</button>
-
-      <p class="error" id="error" role="alert" hidden></p>
-      <p class="note" id="frame-note" hidden></p>
-
-      <p class="note">Your image stays on your phone; it is never uploaded. Works in Safari on iPhone and Chrome on Android. The browser will ask for the camera and motion sensors.</p>
-      <p class="note credit">AR engine: 8th Wall by Niantic Spatial, used under its <a href="vendor/8thwall-LICENSE.txt" target="_blank" rel="noopener">engine license</a>, provided without warranty.</p>
-    </section>
+      <p class="note credit">AR engine © Niantic Spatial (8th Wall), used under its <a href="vendor/8thwall-LICENSE.txt" target="_blank" rel="noopener">engine license</a>, provided without warranty.</p>
+    </footer>
   </main>
 
   <section class="ar" id="ar" aria-label="Camera view" hidden>

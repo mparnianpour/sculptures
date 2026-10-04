@@ -26,7 +26,9 @@
   }
 }
 
-* { box-sizing: border-box; }
+/* XRExtras injects `* { box-sizing: inherit }` after this file, so set it at the root too. */
+html { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; }
 
 html, body {
   margin: 0;
@@ -45,78 +47,145 @@ body {
 
 [hidden] { display: none !important; }
 
-/* ---------- Setup screen ---------- */
+/* ---------- Setup: two steps, each one phone screen ---------- */
 
 .setup {
-  max-width: 34rem;
+  max-width: 30rem;
   margin: 0 auto;
-  padding: max(20px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
-  display: grid;
-  gap: 20px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: max(14px, env(safe-area-inset-top)) 16px max(14px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.intro h1 {
-  font-size: clamp(2rem, 8vw, 2.75rem);
-  line-height: 1.02;
+/* Show only the current step's parts. */
+.setup[data-step="sculpture"] [data-only="image"],
+.setup[data-step="image"] [data-only="sculpture"] { display: none !important; }
+
+.step-head { display: grid; gap: 4px; }
+
+.step-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.step-count {
+  margin: 0;
+  font-size: 14px;
+  color: var(--slate);
+  font-variant-numeric: tabular-nums;
+}
+
+.setup[data-step="image"] .step-count { margin-left: auto; }
+
+.back-link {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--graphite);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 10px 0 0;
+  margin: -8px 0;
+  cursor: pointer;
+}
+
+.back-link:focus-visible { outline: 2px solid var(--lapis); outline-offset: 2px; border-radius: 6px; }
+
+.step-head h1 {
+  font-size: clamp(1.75rem, 7.5vw, 2.25rem);
+  line-height: 1.05;
   letter-spacing: -0.025em;
   font-weight: 600;
-  margin: 8px 0 12px;
-  max-width: 12ch;
+  margin: 0;
 }
 
-.intro p {
-  margin: 0;
+.step-head h1:focus { outline: none; }
+
+.step-lede {
+  margin: 2px 0 0;
+  font-size: 15px;
+  line-height: 1.4;
   color: var(--slate);
-  max-width: 36ch;
+  max-width: 40ch;
 }
 
 .stage {
   position: relative;
   margin: 0;
-  aspect-ratio: 10 / 9;
+  flex: 1 1 0;
+  min-height: 170px;
   background: var(--stone);
   border-radius: var(--radius-stage);
   overflow: hidden;
 }
 
 .stage canvas {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
 }
 
+/* A small label on the stage, readable over the image card. */
 .stage-status {
   position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 12px;
+  left: 10px;
+  bottom: 10px;
+  max-width: calc(100% - 20px);
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--stone);
+  background: color-mix(in srgb, var(--stone) 88%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   font-size: 15px;
+  line-height: 1.35;
   color: var(--slate);
+  pointer-events: none;
 }
 
+.stage-status:empty { display: none; }
 .stage-status.good { color: var(--graphite); }
 .stage-status.warn { color: var(--warn); }
 
-.progress {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 3px;
-  background: transparent;
-}
-
-.progress span {
-  display: block;
-  height: 100%;
-  width: 0%;
-  background: var(--lapis);
-  transition: width 0.2s linear;
-}
-
-.controls {
+.step-body {
   display: grid;
-  gap: 18px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.model-caption {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.35;
+  color: var(--slate);
+  min-height: 1.35em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.model-caption strong {
+  color: var(--graphite);
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.step-foot {
+  display: grid;
+  gap: 10px;
 }
 
 /* Buttons */
@@ -136,6 +205,7 @@ body {
   cursor: pointer;
   text-align: center;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 .button.primary {
@@ -165,11 +235,12 @@ body {
 }
 
 .button:focus-visible,
-.segmented input:focus-visible + span,
 input[type="range"]:focus-visible {
   outline: 2px solid var(--lapis);
   outline-offset: 3px;
 }
+
+.file { position: relative; }
 
 .file input {
   position: absolute;
@@ -184,49 +255,7 @@ input[type="range"]:focus-visible {
   outline-offset: 3px;
 }
 
-/* Segmented control */
-
-.segmented {
-  border: 0;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
-}
-
-.segmented legend {
-  padding: 0;
-  margin-bottom: 8px;
-  font-size: 15px;
-  color: var(--slate);
-}
-
-.segmented label { position: relative; }
-
-.segmented input {
-  position: absolute;
-  opacity: 0;
-}
-
-.segmented span {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  font-size: 16px;
-  cursor: pointer;
-  border-bottom: 1.5px solid var(--rule);
-  color: var(--slate);
-}
-
-.segmented input:checked + span {
-  color: var(--graphite);
-  border-bottom: 3px solid var(--graphite);
-  font-weight: 500;
-}
-
-/* Slider */
+/* Slider (camera view) */
 
 .slider {
   display: grid;
@@ -240,12 +269,6 @@ input[type="range"]:focus-visible {
   color: var(--slate);
 }
 
-.slider output {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  font-size: 15px;
-}
-
 input[type="range"] {
   width: 100%;
   accent-color: var(--lapis);
@@ -254,40 +277,48 @@ input[type="range"] {
 
 .error {
   margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
   color: var(--warn);
 }
 
 .error a { color: inherit; font-weight: 600; }
 
-.note a { color: inherit; }
-.credit { font-size: 13px; }
-
 .note {
   margin: 0;
   font-size: 14px;
+  line-height: 1.4;
   color: var(--slate);
-  max-width: 44ch;
+  max-width: 46ch;
+}
+
+.note a { color: inherit; }
+
+.credit {
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  max-width: none;
 }
 
 /* ---------- Sculpture picker ---------- */
 
-.picker { display: grid; gap: 10px; min-width: 0; }
-
-.picker-label {
-  margin: 0;
-  font-size: 15px;
-  color: var(--slate);
-}
-
+/* Three across on a phone; more scroll sideways. */
 .picker-row {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(84px, calc((100% - 24px) / 3));
   gap: 12px;
   overflow-x: auto;
-  padding: 4px 4px 8px;
-  margin: -4px -4px 0;
+  overscroll-behavior-x: contain;
+  padding: 3px;
+  margin: -3px;
   scroll-snap-type: x proximity;
+  scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
+
+.picker-row::-webkit-scrollbar { display: none; }
 
 .pick {
   appearance: none;
@@ -299,8 +330,7 @@ input[type="range"] {
   cursor: pointer;
   display: grid;
   gap: 6px;
-  width: 92px;
-  flex: none;
+  min-width: 0;
   text-align: left;
   scroll-snap-align: start;
 }
@@ -330,7 +360,7 @@ input[type="range"] {
   white-space: nowrap;
 }
 
-.pick[aria-selected="true"] { color: var(--graphite); }
+.pick[aria-selected="true"] { color: var(--graphite); font-weight: 500; }
 .pick[aria-selected="true"] .pick-thumb { box-shadow: inset 0 0 0 2px var(--graphite); }
 .pick.loading .pick-thumb { opacity: 0.55; }
 .pick:focus-visible { outline: 2px solid var(--lapis); outline-offset: 3px; }
@@ -344,7 +374,7 @@ input[type="range"] {
   padding: 2px;
 }
 
-.pick.compact { width: 52px; }
+.pick.compact { width: 52px; flex: none; }
 .pick.compact .pick-thumb {
   background: rgba(20, 22, 25, 0.55);
   backdrop-filter: blur(8px);
@@ -354,6 +384,13 @@ input[type="range"] {
   font-size: 20px;
 }
 .pick.compact[aria-selected="true"] .pick-thumb { box-shadow: inset 0 0 0 2px #fff; }
+
+/* Short phones: tighten so the step still fits on one screen. */
+@media (max-height: 600px) {
+  .setup { gap: 10px; }
+  .step-lede { display: none; }
+  .note:not(.credit):not(#frame-note) { font-size: 13px; }
+}
 
 /* ---------- AR screen ---------- */
 
@@ -423,28 +460,19 @@ body[data-state="ar"] { background: #000; overflow: hidden; }
 .slider.compact .slider-label { color: #fff; }
 .slider.compact input { accent-color: #fff; }
 
-/* ---------- Wide screens ---------- */
+/* ---------- Wide screens: keep the phone-width column, centred ---------- */
 
-@media (min-width: 900px) {
+@media (min-width: 700px) and (min-height: 700px) {
+  body[data-state="setup"] { display: flex; align-items: center; }
   .setup {
-    max-width: 1080px;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-    grid-template-areas:
-      "stage intro"
-      "stage controls"
-      "picker controls";
-    align-content: center;
-    min-height: 100%;
-    column-gap: 48px;
-    row-gap: 28px;
-    padding-top: 48px;
+    width: 100%;
+    min-height: 0;
+    height: min(100dvh, 940px);
+    padding-top: 28px;
+    padding-bottom: 20px;
   }
-  .stage { grid-area: stage; align-self: start; }
-  .intro { grid-area: intro; align-self: end; }
-  .controls { grid-area: controls; align-self: start; }
-  .picker { grid-area: picker; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .progress span, .hint { transition: none; }
+  .hint, .pick-thumb { transition: none; }
 }
