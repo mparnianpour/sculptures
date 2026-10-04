@@ -48,6 +48,7 @@ jobs:
         run: |
           mkdir -p _site
           cp -r catalog.json models thumbs index.html _site/
+          if [ -d ar ]; then cp -r ar _site/; fi
 
       - uses: actions/configure-pages@v6
 
