@@ -43,6 +43,8 @@ const ui = {
   frameNote: $('frame-note'), pickerRow: $('picker-row'), pickerAr: $('picker-ar'),
   next: $('next'), stepBack: $('step-back'), stepCount: $('step-count'), stepTitle: $('step-title'),
   modelTitle: $('model-title'), modelDesc: $('model-desc'), modes: $('ar-modes'),
+  sourceRow: $('source-row'), snap: $('snap'), snapVideo: $('snap-video'), snapGuide: $('snap-guide'),
+  snapOpen: $('snap-open'), snapCancel: $('snap-cancel'), snapShutter: $('snap-shutter'), snapShape: $('snap-shape'),
 };
 
 const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -365,15 +367,18 @@ function setHint(text) {
   else ui.hint.classList.add('found');
 }
 
-// Step 1's button needs a loaded sculpture; step 2 shows "Choose image" as the
-// main action until there is a usable image, then "Start camera".
+// Step 1's button needs a loaded sculpture. Step 2 offers "Take a photo" and
+// "Choose from your photos" until there is a usable image, then "Start camera".
 function refreshStart() {
   const rigReady = !!state.rig && !state.loading;
   ui.next.disabled = !rigReady;
   const ready = !!state.target;
   ui.start.hidden = !ready;
-  ui.chooseLabel.classList.toggle('primary', !ready);
-  ui.chooseLabel.classList.toggle('secondary', ready);
+  ui.sourceRow.classList.toggle('compact', ready);
+  ui.snapOpen.classList.toggle('primary', !ready);
+  ui.snapOpen.classList.toggle('secondary', ready);
+  ui.snapOpen.textContent = ready ? 'Retake photo' : 'Take a photo';
+  ui.chooseText.textContent = ready ? 'Choose another' : 'Choose from your photos';
   ui.start.disabled = !(ready && rigReady && state.xrReady);
   ui.start.textContent = state.xrReady ? 'Start camera' : 'Getting the camera ready…';
 }
@@ -500,6 +505,14 @@ async function prepareTarget(file) {
     showError('That file could not be opened as an image. Choose a JPG or PNG.');
     return;
   }
+  await useImage(img);
+}
+
+// Turns a decoded photo (or a canvas from "Take a photo") into the image target.
+async function useImage(img) {
+  showError('');
+  state.target = null;
+  refreshStart();
   if (Math.min(img.width, img.height) < 200) {
     setStatus('Choose an image to begin');
     showError('That image is too small. Choose one at least 480 pixels on its short side.');
@@ -510,7 +523,6 @@ async function prepareTarget(file) {
   state.aspect = built.aspect;
   if (state.rig) state.rig.layout();
   preview.setImage(built.display);
-  ui.chooseText.textContent = 'Choose another image';
 
   const score = detailScore(built.display);
   window.__detail = score;
@@ -1147,6 +1159,128 @@ function setSize(value) {
 }
 
 // ---------------------------------------------------------------------------
+// "Take a photo": the camera inside this page. Android's own camera app often
+// makes the phone close the browser page to free memory, and the photo is lost.
+// ---------------------------------------------------------------------------
+const snap = (() => {
+  let stream = null;
+  let landscape = false;
+
+  const isOpen = () => !ui.snap.hidden;
+
+  function setShape(isLandscape) {
+    landscape = isLandscape;
+    ui.snapGuide.classList.toggle('landscape', landscape);
+    ui.snapShape.textContent = landscape ? 'Portrait' : 'Landscape';
+    ui.snapShape.setAttribute('aria-label', landscape ? 'Switch the frame to portrait' : 'Switch the frame to landscape');
+  }
+
+  function release() {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    ui.snapVideo.srcObject = null;
+  }
+
+  function close() {
+    if (!isOpen()) return;
+    release();
+    ui.snap.hidden = true;
+    document.body.dataset.state = 'setup';
+    preview.start();
+  }
+
+  // Leave the photo screen; drops its history entry so the back gesture stays in step.
+  function leave() {
+    close();
+    if (historyStep() === 'snap') history.back();
+  }
+
+  async function open() {
+    if (isOpen()) return;
+    showError('');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showError('This browser can\'t open the camera here. Choose a photo instead.');
+      return;
+    }
+    preview.stop();
+    ui.snap.hidden = false;
+    ui.snapShutter.disabled = true;
+    document.body.dataset.state = 'snap';
+    if (historyStep() !== 'snap') history.pushState({ step: 'snap' }, '', location.href);
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1920 } },
+      });
+      if (!isOpen()) { release(); return; }       // cancelled while the camera was starting
+      ui.snapVideo.srcObject = stream;
+      await ui.snapVideo.play().catch(() => {});
+      ui.snapShutter.disabled = false;
+    } catch (err) {
+      console.warn(err);
+      leave();
+      showError(inFrame
+        ? `The camera is blocked inside this frame. ${openInTabLink}, or choose a photo instead.`
+        : 'The camera didn\'t open. Allow the camera for this site and try again, or choose a photo instead.');
+    }
+  }
+
+  // Keep exactly what is inside the frame.
+  function capture() {
+    const v = ui.snapVideo;
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return;
+    const vr = v.getBoundingClientRect();
+    const gr = ui.snapGuide.getBoundingClientRect();
+    const k = Math.max(vr.width / vw, vr.height / vh);          // object-fit: cover
+    const ox = vr.left + (vr.width - vw * k) / 2;
+    const oy = vr.top + (vr.height - vh * k) / 2;
+    let sx = (gr.left - ox) / k, sy = (gr.top - oy) / k;
+    let sw = gr.width / k, sh = gr.height / k;
+    sx = Math.max(0, sx); sy = Math.max(0, sy);
+    sw = Math.min(sw, vw - sx); sh = Math.min(sh, vh - sy);
+    const c = document.createElement('canvas');
+    c.width = Math.round(sw); c.height = Math.round(sh);
+    c.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    window.__snapped = { video: [vw, vh], crop: [Math.round(sx), Math.round(sy), c.width, c.height] };
+    leave();
+    setStatus('Reading your photo…');
+    useImage(c);
+  }
+
+  ui.snapOpen.addEventListener('click', open);
+  ui.snapCancel.addEventListener('click', leave);
+  ui.snapShutter.addEventListener('click', capture);
+  ui.snapShape.addEventListener('click', () => setShape(!landscape));
+  setShape(false);
+  return { open, close, isOpen };
+})();
+
+// If the phone closes the page while its photo picker or camera app is open,
+// come back to step 2 with the same sculpture and say what happened.
+const PICK_KEY = 'sculpture-ar:picking';
+function notePicking(on) {
+  try {
+    if (on) sessionStorage.setItem(PICK_KEY, JSON.stringify({ model: state.modelId, t: Date.now() }));
+    else sessionStorage.removeItem(PICK_KEY);
+  } catch { /* storage blocked: nothing to recover */ }
+}
+const recovered = (() => {
+  try {
+    const r = JSON.parse(sessionStorage.getItem(PICK_KEY) || 'null');
+    sessionStorage.removeItem(PICK_KEY);
+    return r && Date.now() - r.t < 15 * 60 * 1000 ? r : null;
+  } catch { return null; }
+})();
+
+ui.chooseLabel.addEventListener('click', () => { notePicking(true); preview.stop(); });
+ui.file.addEventListener('cancel', () => { notePicking(false); preview.start(); });
+window.addEventListener('focus', () => setTimeout(() => notePicking(false), 3000));
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !state.running && !snap.isOpen()) preview.start();
+});
+
+// ---------------------------------------------------------------------------
 // Setup steps. Each step (and the camera view) is a browser history entry, so
 // the phone's back gesture goes camera → image → sculpture.
 // ---------------------------------------------------------------------------
@@ -1187,7 +1321,13 @@ function leaveAR() {
 }
 
 window.addEventListener('popstate', () => {
-  const step = historyStep();
+  let step = historyStep();
+  if (snap.isOpen() && step !== 'snap') snap.close();
+  if (step === 'snap' && !snap.isOpen()) {       // moving forward into an old photo screen
+    history.replaceState({ step: 'image' }, '', location.href);
+    step = 'image';
+  }
+  if (step === 'snap') return;
   if (step === 'ar') {
     // Moving forward into a finished camera session: the camera needs a tap to start.
     if (!state.running) { history.replaceState({ step: 'image' }, '', location.href); showStep('image'); }
@@ -1199,6 +1339,8 @@ window.addEventListener('popstate', () => {
 
 ui.sizeAr.addEventListener('input', (e) => setSize(e.target.value));
 ui.file.addEventListener('change', () => {
+  notePicking(false);
+  preview.start();
   const file = ui.file.files && ui.file.files[0];
   if (file) prepareTarget(file);
   ui.file.value = '';
@@ -1356,15 +1498,23 @@ async function selectModel(id) {
 // Boot
 // ---------------------------------------------------------------------------
 // A reload keeps the step the visitor was on (the camera view comes back as step 2).
-if (historyStep() === 'ar') history.replaceState({ step: 'image' }, '', location.href);
+if (historyStep() === 'ar' || historyStep() === 'snap') history.replaceState({ step: 'image' }, '', location.href);
+if (recovered && historyStep() !== 'image') {
+  history.replaceState({ step: 'sculpture' }, '', location.href);
+  history.pushState({ step: 'image' }, '', location.href);
+}
 showStep(historyStep(), { focus: false });
+if (recovered) {
+  showError('Your phone closed this page while the photo was being chosen, so it didn\'t arrive. '
+    + 'Use “Take a photo”: it uses the camera right here, without leaving the page.');
+}
 preview.start();
 setStatus('Loading the sculptures…', '', 'sculpture');
 loadCatalog().then(({ models, source }) => {
   state.models = models;
   window.__catalog = { source, count: models.length };
   renderPickers();
-  const wanted = new URLSearchParams(location.search).get('model');
+  const wanted = new URLSearchParams(location.search).get('model') || (recovered && recovered.model);
   selectModel(models.some((m) => m.id === wanted) ? wanted : models[0].id);
 });
 

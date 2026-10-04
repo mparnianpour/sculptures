@@ -70,15 +70,32 @@
     <footer class="step-foot">
       <button class="button primary" id="next" type="button" data-only="sculpture" disabled>Use this sculpture</button>
 
-      <label class="button primary file" id="choose-label" data-only="image">
-        <input type="file" id="file" accept="image/*">
-        <span id="choose-text">Choose image</span>
-      </label>
+      <!-- "Take a photo" uses the camera inside this page. Android's own camera app
+           often makes the phone close the page, and the photo is lost. -->
+      <div class="source-row" id="source-row" data-only="image">
+        <button class="button primary" id="snap-open" type="button">Take a photo</button>
+        <label class="button secondary file" id="choose-label">
+          <input type="file" id="file" accept="image/*">
+          <span id="choose-text">Choose from your photos</span>
+        </label>
+      </div>
       <button class="button primary" id="start" type="button" data-only="image" hidden disabled>Start camera</button>
 
       <p class="note credit">AR engine © Niantic Spatial (8th Wall), used under its <a href="vendor/8thwall-LICENSE.txt" target="_blank" rel="noopener">engine license</a>, provided without warranty.</p>
     </footer>
   </main>
+
+  <!-- Taking a photo of the image, inside the page -->
+  <section class="snap" id="snap" aria-label="Take a photo of your image" hidden>
+    <video id="snap-video" playsinline muted autoplay></video>
+    <div class="snap-guide" id="snap-guide"></div>
+    <p class="snap-hint">Fill the frame with your image, straight on. Hold steady, then tap the button.</p>
+    <div class="snap-bar">
+      <button class="button ghost" id="snap-cancel" type="button">Cancel</button>
+      <button class="snap-shutter" id="snap-shutter" type="button" aria-label="Take the photo" disabled></button>
+      <button class="button ghost" id="snap-shape" type="button" aria-label="Switch the frame to landscape">Landscape</button>
+    </div>
+  </section>
 
   <section class="ar" id="ar" aria-label="Camera view" hidden>
     <canvas id="xr-canvas"></canvas>
