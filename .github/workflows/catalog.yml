@@ -49,6 +49,12 @@ jobs:
           mkdir -p _site
           cp -r catalog.json models thumbs index.html _site/
           if [ -d ar ]; then cp -r ar _site/; fi
+          # Person segmentation for the AR page (people in front hide the sculpture):
+          # MediaPipe Tasks Vision from npm, Apache License 2.0. The model is in ar/vendor/mediapipe.
+          MP=_site/ar/vendor/mediapipe
+          mkdir -p $MP/wasm
+          cp node_modules/@mediapipe/tasks-vision/vision_bundle.mjs $MP/vision_bundle.js
+          cp node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.* node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_nosimd_internal.* $MP/wasm/
 
       - uses: actions/configure-pages@v6
 
