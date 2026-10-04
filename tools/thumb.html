@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html,body{margin:0;background:transparent}canvas{display:block}</style>
+<script type="importmap">
+  { "imports": {
+      "three": "/node_modules/three/build/three.module.js",
+      "three/addons/": "/node_modules/three/examples/jsm/"
+  } }
+</script>
+</head>
+<body>
+<script type="module">
+// Renders one GLB to a square, transparent thumbnail. Used by build-catalog.mjs.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const params = new URLSearchParams(location.search);
+const SIZE = Number(params.get('size') || 384);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(SIZE, SIZE);
+renderer.setClearColor(0x000000, 0);
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+const loader = new GLTFLoader();
+const draco = new DRACOLoader().setDecoderPath('/node_modules/three/examples/jsm/libs/draco/gltf/');
+loader.setDRACOLoader(draco);
+loader.setMeshoptDecoder(MeshoptDecoder);
+
+try {
+  const gltf = await loader.loadAsync(params.get('model'));
+  const model = gltf.scene;
+  // Pose at the first frame of the first animation, if any.
+  if (gltf.animations.length) {
+    const mixer = new THREE.AnimationMixer(model);
+    mixer.clipAction(gltf.animations[0]).play();
+    mixer.update(0);
+  }
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  model.position.sub(new THREE.Vector3(sphere.center.x, box.min.y, sphere.center.z));
+  model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  scene.add(model);
+
+  const r = sphere.radius;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(r * 6, r * 6).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ opacity: 0.18 }));
+  ground.receiveShadow = true;
+  scene.add(ground);
+  const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+  sun.position.set(r * 1.2, r * 3, r * 1.6);
+  sun.target.position.set(0, (box.max.y - box.min.y) * 0.3, 0);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  Object.assign(sun.shadow.camera, { left: -r * 2, right: r * 2, top: r * 2, bottom: -r * 2, near: 0.01, far: r * 10 });
+  scene.add(sun, sun.target);
+
+  // Frame the model tightly: fit its projected outline, not its bounding sphere.
+  const camera = new THREE.PerspectiveCamera(30, 1, r * 0.01, r * 20);
+  const target = new THREE.Vector3(0, (box.max.y - box.min.y) * 0.5, 0);
+  const dir = new THREE.Vector3(0.55, 0.42, 1).normalize();
+  let dist = r / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
+  const pts = [];
+  model.updateMatrixWorld(true);
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    const pos = o.geometry.attributes.position;
+    const step = Math.max(1, Math.floor(pos.count / 4000));
+    for (let i = 0; i < pos.count; i += step) pts.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld));
+  });
+  for (let k = 0; k < 2; k++) {
+    camera.position.copy(target).addScaledVector(dir, dist);
+    camera.lookAt(target);
+    camera.updateMatrixWorld(true);
+    let minX = 1, maxX = -1, minY = 1, maxY = -1;
+    for (const p of pts) {
+      const v = p.clone().project(camera);
+      minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x); minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+    }
+    // Re-centre on the outline and scale the distance so it fills ~84% of the frame.
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    const ndc = new THREE.Vector3(cx, cy, new THREE.Vector3().copy(target).project(camera).z).unproject(camera);
+    target.copy(ndc);
+    dist *= Math.max(maxX - minX, maxY - minY) / 2 / 0.84;
+  }
+  camera.position.copy(target).addScaledVector(dir, dist);
+  camera.lookAt(target);
+
+  renderer.render(scene, camera);
+  window.__info = {
+    animations: gltf.animations.map((a) => ({ name: a.name, duration: +a.duration.toFixed(3) })),
+  };
+  window.__done = true;
+} catch (err) {
+  window.__error = String(err && err.message || err);
+  window.__done = true;
+}
+</script>
+</body>
+</html>
