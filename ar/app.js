@@ -519,6 +519,10 @@ const anchor = {
   pos: new THREE.Vector3(),
   quat: new THREE.Quaternion(),
   scale: 1,
+  // The visitor's own adjustments (drag / twist), on top of where the image put it.
+  // Kept in the image's frame, so later corrections from the image carry them along.
+  offset: new THREE.Vector3(),  // image widths, along the floor (or table)
+  yaw: 0,                       // radians, around the vertical axis
 };
 anchor.group.visible = false;
 
@@ -543,9 +547,18 @@ function poseFrom(detail) {
   };
 }
 
+// The image frame's "up": +Z when the image lies on a table, +Y when it hangs on a wall.
+const localUp = () => (state.mode === 'table' ? _upTable : _upWall);
+const _upTable = new THREE.Vector3(0, 0, 1);
+const _upWall = new THREE.Vector3(0, 1, 0);
+const _qYaw = new THREE.Quaternion();
+const _off = new THREE.Vector3();
+
 function applyAnchor() {
-  anchor.group.position.copy(anchor.pos);
-  anchor.group.quaternion.copy(anchor.quat);
+  _off.copy(anchor.offset).multiplyScalar(anchor.scale).applyQuaternion(anchor.quat);
+  anchor.group.position.copy(anchor.pos).add(_off);
+  _qYaw.setFromAxisAngle(localUp(), anchor.yaw);
+  anchor.group.quaternion.copy(anchor.quat).multiply(_qYaw);
   anchor.group.scale.setScalar(anchor.scale);
 }
 
@@ -602,6 +615,9 @@ function setMode(mode) {
 function resetPlacement() {
   anchor.placed = false;
   anchor.samples = [];
+  anchor.offset.set(0, 0, 0);
+  anchor.yaw = 0;
+  gestures.cancel();
   anchor.group.visible = false;
   ui.replace.hidden = true;
   if (state.worldTracking && !floor.ready) setHint('Point at the floor and move your phone slowly');
@@ -625,7 +641,10 @@ function placeFromSamples() {
   window.__placed = { altitude: floor.altitude, mode, scale: anchor.scale };
   setHint(mode === 'table' ? 'Placed on the table. Walk around it.' : 'Placed in front of the wall. Walk around it.');
   clearTimeout(placeFromSamples.t);
-  placeFromSamples.t = setTimeout(() => setHint(null), 2500);
+  placeFromSamples.t = setTimeout(() => {
+    setHint('Drag to move it. Two fingers to turn or resize.');
+    placeFromSamples.t = setTimeout(() => setHint(null), 4000);
+  }, 2500);
 }
 
 function onImagePose(detail, camera) {
@@ -642,7 +661,9 @@ function onImagePose(detail, camera) {
       anchor.pos.copy(p.pos); anchor.quat.copy(p.quat); anchor.scale = p.scale;
       anchor.placed = true;
       anchor.group.visible = true;
-      setHint(null);
+      setHint('Drag to move it, Shift-drag to turn, scroll to resize.');
+      clearTimeout(placeFromSamples.t);
+      placeFromSamples.t = setTimeout(() => setHint(null), 4000);
     } else {
       anchor.pos.lerp(p.pos, DESKTOP_ALPHA);
       anchor.quat.slerp(p.quat, DESKTOP_ALPHA);
@@ -705,6 +726,122 @@ function updateFloor(camera) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Moving the sculpture in the camera view
+//   one finger: slide it along the floor or table (its height stays locked)
+//   two fingers: twist to turn it, pinch to resize it
+//   mouse: drag to move, Shift-drag to turn, scroll to resize
+// ---------------------------------------------------------------------------
+const gestures = (() => {
+  const pointers = new Map();          // pointerId → { x, y }
+  const ray = new THREE.Raycaster();
+  const plane = new THREE.Plane();
+  const ndc = new THREE.Vector2();
+  const hit = new THREE.Vector3();
+  const startHit = new THREE.Vector3();
+  const startOffset = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  const inv = new THREE.Quaternion();
+  const MAX_OFFSET = 40;               // image widths
+  let mode = null;                     // 'drag' | 'twist' | 'turn'
+  let startYaw = 0, startSize = 1, startDist = 1, lastAngle = 0, twist = 0, startX = 0;
+
+  const active = () => state.running && anchor.placed;
+  const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  const sizeLimits = () => [Number(ui.sizeAr.min) || 0.3, Number(ui.sizeAr.max) || 3];
+
+  // Where a screen point meets the level plane through the sculpture.
+  function planeHit(x, y, out) {
+    const { camera } = XR8.Threejs.xrScene();
+    camera.updateMatrixWorld();
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+    const r = ui.xrCanvas.getBoundingClientRect();
+    ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    n.copy(localUp()).applyQuaternion(anchor.quat);
+    plane.setFromNormalAndCoplanarPoint(n, anchor.group.position);
+    if (!ray.ray.intersectPlane(plane, out)) return null;
+    if (out.distanceTo(ray.ray.origin) > 25 * Math.max(anchor.scale, 0.2)) return null;   // near the horizon
+    return out;
+  }
+
+  function begin(e) {
+    const list = [...pointers.values()];
+    mode = null;
+    if (list.length >= 2) {
+      const [a, b] = list;
+      startDist = Math.max(10, Math.hypot(b.x - a.x, b.y - a.y));
+      lastAngle = Math.atan2(b.y - a.y, b.x - a.x);
+      twist = 0;
+      startYaw = anchor.yaw;
+      startSize = state.size;
+      mode = 'twist';
+    } else if (list.length === 1) {
+      const p = list[0];
+      if (e && e.shiftKey) { startX = p.x; startYaw = anchor.yaw; mode = 'turn'; }
+      else if (planeHit(p.x, p.y, startHit)) { startOffset.copy(anchor.offset); mode = 'drag'; }
+    }
+  }
+
+  function onDown(e) {
+    if (!active()) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { ui.xrCanvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    begin(e);
+    e.preventDefault();
+  }
+
+  function onMove(e) {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    p.x = e.clientX; p.y = e.clientY;
+    if (!active() || !mode) return;
+    if (mode === 'drag') {
+      if (!planeHit(p.x, p.y, hit)) return;
+      // World movement of the finger → image frame, along the floor only.
+      hit.sub(startHit).multiplyScalar(1 / anchor.scale).applyQuaternion(inv.copy(anchor.quat).invert());
+      const up = localUp();
+      hit.addScaledVector(up, -hit.dot(up));
+      anchor.offset.copy(startOffset).add(hit);
+      if (anchor.offset.length() > MAX_OFFSET) anchor.offset.setLength(MAX_OFFSET);
+    } else if (mode === 'twist' && pointers.size >= 2) {
+      const [a, b] = [...pointers.values()];
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      twist += wrap(angle - lastAngle);
+      lastAngle = angle;
+      anchor.yaw = startYaw - twist;   // clockwise on screen turns it clockwise
+      const dist = Math.max(10, Math.hypot(b.x - a.x, b.y - a.y));
+      const [lo, hi] = sizeLimits();
+      setSize(THREE.MathUtils.clamp(startSize * dist / startDist, lo, hi));
+    } else if (mode === 'turn') {
+      anchor.yaw = startYaw + (p.x - startX) * 0.01;
+    }
+    applyAnchor();
+    window.__moved = { offset: anchor.offset.toArray(), yaw: anchor.yaw, size: state.size };
+  }
+
+  function onUp(e) {
+    if (!pointers.delete(e.pointerId)) return;
+    begin(e);   // carry on smoothly with the fingers still down
+  }
+
+  function onWheel(e) {
+    if (!active()) return;
+    e.preventDefault();
+    const [lo, hi] = sizeLimits();
+    setSize(THREE.MathUtils.clamp(state.size * Math.exp(-e.deltaY * 0.0015), lo, hi));
+  }
+
+  ui.xrCanvas.addEventListener('pointerdown', onDown);
+  ui.xrCanvas.addEventListener('pointermove', onMove);
+  ui.xrCanvas.addEventListener('pointerup', onUp);
+  ui.xrCanvas.addEventListener('pointercancel', onUp);
+  ui.xrCanvas.addEventListener('lostpointercapture', onUp);
+  ui.xrCanvas.addEventListener('wheel', onWheel, { passive: false });
+
+  return { cancel() { pointers.clear(); mode = null; } };
+})();
 
 // ---------------------------------------------------------------------------
 // 8th Wall session
