@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-04T19:52:02.631Z",
+  "updated": "2026-10-04T21:17:17.557Z",
   "models": [
     {
       "id": "sc3",
@@ -42,6 +42,22 @@
       "megabytes": 2.63,
       "extensions": [
         "EXT_meshopt_compression",
+        "KHR_mesh_quantization"
+      ]
+    },
+    {
+      "id": "simorgh2",
+      "title": "Simorgh 2",
+      "description": "",
+      "file": "models/simorgh2.glb?v=230ba31512",
+      "thumbnail": "thumbs/simorgh2-230ba31512.png",
+      "size": 1,
+      "animations": [],
+      "triangles": 93792,
+      "megabytes": 0.35,
+      "extensions": [
+        "EXT_meshopt_compression",
+        "KHR_materials_anisotropy",
         "KHR_mesh_quantization"
       ]
     },
