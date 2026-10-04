@@ -19,6 +19,7 @@ const PATHS = {
   draco: './lib/three/examples/jsm/libs/draco/gltf/',
   builtInModel: 'model/sc3.glb',
   builtInThumb: 'model/sc3.png',
+  mediapipe: './lib/mediapipe/',      // person segmentation (people in front hide the sculpture)
   ...(window.SCULPTURE_PATHS || {}),
 };
 const BUILT_IN_CATALOG = {
@@ -65,6 +66,7 @@ const state = {
   xrReady: false,
   running: false,
   worldTracking: true,
+  config: {},           // config.json
 };
 
 const inFrame = (() => { try { return window.self !== window.top; } catch { return true; } })();
@@ -968,6 +970,271 @@ const gestures = (() => {
 })();
 
 // ---------------------------------------------------------------------------
+// People in front of the sculpture hide it.
+// Adapted from ar-test (src/people-occlusion.ts): several times a second, the part
+// of the camera picture around the sculpture goes through MediaPipe's person
+// segmentation. Wherever a person is, an invisible depth mask is drawn before the
+// scene, so the sculpture isn't drawn there and the real person shows through.
+// Added here: a person only hides the sculpture when they stand in front of it.
+// Where their feet meet the floor tells how far away they are; people whose feet
+// are out of view below the sculpture are taken to be close.
+// Turn off with ?occlusion=0 or "peopleOcclusion": false in config.json;
+// ?mask paints what it detects in magenta.
+// ---------------------------------------------------------------------------
+const occlusion = (() => {
+  const MASK = 256;
+  const THRESHOLD = 0.4;     // person confidence needed to hide the sculpture
+  const ROI_SCALE = 1.8;     // analysed area, relative to the sculpture's size on screen
+  const MAX_FPS = 15;        // segmentations per second
+  const MIN_BLOB = 150;      // ignore specks smaller than this (mask pixels)
+  const MODEL_FILE = 'selfie_segmenter.tflite';
+  const params = new URLSearchParams(location.search);
+  const showMask = params.has('mask');
+
+  let status = 'idle';       // idle | loading | ready | failed
+  let segmenter = null;
+  let scene = null, mesh = null, material = null;
+  let lastRun = -Infinity, lastTs = 0;
+  let costMs = 0;            // average time one update takes; slow phones run it less often
+  let runs = 0;
+
+  const maskData = new Uint8Array(MASK * MASK * 4);
+  const maskTexture = new THREE.DataTexture(maskData, MASK, MASK, THREE.RGBAFormat, THREE.UnsignedByteType);
+  maskTexture.magFilter = THREE.LinearFilter;
+  maskTexture.minFilter = THREE.LinearFilter;
+  maskTexture.generateMipmaps = false;
+  const labels = new Int32Array(MASK * MASK);
+  const queue = new Int32Array(MASK * MASK);
+  const crop = document.createElement('canvas');
+  crop.width = crop.height = MASK;
+  const cropCtx = crop.getContext('2d');
+  const box = new THREE.Box3();
+  const corner = new THREE.Vector3();
+  const centre = new THREE.Vector3();
+  const ray = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const foot = new THREE.Vector3();
+  const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);   // absolute scale: floor at y = 0
+
+  const enabled = () => params.get('occlusion') !== '0' && state.config.peopleOcclusion !== false;
+  const base = () => new URL(state.config.mediapipeUrl || PATHS.mediapipe, location.href).href.replace(/\/?$/, '/');
+
+  async function load() {
+    if (status !== 'idle') return;
+    status = 'loading';
+    try {
+      const b = base();
+      const vision = await import(/* webpackIgnore: true */ `${b}vision_bundle.js`);
+      const fileset = await vision.FilesetResolver.forVisionTasks(`${b}wasm`);
+      const create = (delegate) => vision.ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: `${b}${MODEL_FILE}`, delegate },
+        runningMode: 'VIDEO',
+        outputConfidenceMasks: true,
+        outputCategoryMask: false,
+      });
+      try { segmenter = await create('GPU'); }
+      catch (e) { console.warn('[occlusion] GPU segmentation unavailable, using CPU', e); segmenter = await create('CPU'); }
+      status = 'ready';
+      console.log('[occlusion] person segmentation ready');
+    } catch (e) {
+      status = 'failed';
+      console.warn('[occlusion] could not load person segmentation; occlusion is off', e);
+    }
+  }
+
+  // Full-screen quad just inside the near plane: writes depth only, where a person is.
+  function attach(s) {
+    if (!enabled()) return;
+    scene = s;
+    material = new THREE.ShaderMaterial({
+      uniforms: {
+        uMask: { value: maskTexture },
+        uRect: { value: new THREE.Vector4(0, 0, 1, 1) },
+        uThreshold: { value: THRESHOLD },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = position.xy * 0.5 + 0.5;
+          gl_Position = vec4(position.xy, -0.9999, 1.0);
+        }`,
+      fragmentShader: `
+        uniform sampler2D uMask;
+        uniform vec4 uRect;
+        uniform float uThreshold;
+        varying vec2 vUv;
+        void main() {
+          vec2 s = vec2(vUv.x, 1.0 - vUv.y);
+          vec2 m = (s - uRect.xy) / (uRect.zw - uRect.xy);
+          if (m.x < 0.0 || m.x > 1.0 || m.y < 0.0 || m.y > 1.0) discard;
+          if (texture2D(uMask, m).r < uThreshold) discard;
+          gl_FragColor = vec4(1.0, 0.0, 0.6, 1.0);   // only seen with ?mask
+        }`,
+      colorWrite: showMask,
+      depthWrite: true,
+      depthTest: true,
+      depthFunc: THREE.AlwaysDepth,
+    });
+    mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    mesh.name = 'people-occlusion-mask';
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -1e6;     // before everything else
+    mesh.visible = false;
+    scene.add(mesh);
+    load();
+  }
+
+  function detach() {
+    if (!mesh) return;
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    material.dispose();
+    mesh = material = scene = null;
+  }
+
+  // The engine's camera picture: the hidden <video> 8th Wall adds to the page.
+  function cameraVideo() {
+    for (const v of document.querySelectorAll('video')) {
+      if (v !== ui.snapVideo && v.srcObject && v.videoWidth > 0 && v.readyState >= 2) return v;
+    }
+    return null;
+  }
+
+  // Screen box (UV, v from the top) around the sculpture, or null if it's off screen.
+  function sculptureRect(camera) {
+    box.setFromObject(state.rig.pivot);
+    if (box.isEmpty()) return null;
+    let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity, behind = 0;
+    for (let i = 0; i < 8; i++) {
+      corner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z);
+      corner.applyMatrix4(camera.matrixWorldInverse);
+      if (corner.z > -camera.near) { behind++; continue; }
+      corner.applyMatrix4(camera.projectionMatrix);
+      u0 = Math.min(u0, (corner.x + 1) / 2); u1 = Math.max(u1, (corner.x + 1) / 2);
+      v0 = Math.min(v0, (1 - corner.y) / 2); v1 = Math.max(v1, (1 - corner.y) / 2);
+    }
+    if (behind === 8) return null;
+    if (behind > 0) return { u0: 0, v0: 0, u1: 1, v1: 1 };
+    u0 = Math.max(0, u0); v0 = Math.max(0, v0); u1 = Math.min(1, u1); v1 = Math.min(1, v1);
+    return u1 > u0 && v1 > v0 ? { u0, v0, u1, v1 } : null;
+  }
+
+  // Keep only the people standing in front of the sculpture.
+  //   toNdc(mx, my): mask pixel → normalised screen coordinates.
+  function keepPeopleInFront(camera, toNdc) {
+    const thr = THRESHOLD * 255;
+    labels.fill(0);
+    const comps = [null];
+    for (let start = 0; start < MASK * MASK; start++) {
+      if (labels[start] || maskData[start * 4] < thr) continue;
+      const id = comps.length;
+      let head = 0, tail = 0, count = 0, maxRow = -1, footX = 0, footN = 0;
+      queue[tail++] = start; labels[start] = id;
+      while (head < tail) {
+        const i = queue[head++];
+        const x = i % MASK, y = (i - x) / MASK;
+        count++;
+        if (y > maxRow) { maxRow = y; footX = x; footN = 1; } else if (y === maxRow) { footX += x; footN++; }
+        const nb = [x > 0 ? i - 1 : -1, x < MASK - 1 ? i + 1 : -1, y > 0 ? i - MASK : -1, y < MASK - 1 ? i + MASK : -1];
+        for (const j of nb) {
+          if (j >= 0 && !labels[j] && maskData[j * 4] >= thr) { labels[j] = id; queue[tail++] = j; }
+        }
+      }
+      comps.push({ count, maxRow, footX: footX / footN, front: false, dist: null });
+    }
+    // How far is the sculpture (along the floor)?
+    state.rig.pivot.getWorldPosition(centre);
+    const dObj = Math.hypot(centre.x - camera.position.x, centre.z - camera.position.z);
+    for (let id = 1; id < comps.length; id++) {
+      const c = comps[id];
+      if (c.count < MIN_BLOB) continue;
+      if (!state.worldTracking || c.maxRow >= MASK - 2) { c.front = true; continue; }   // feet out of view: close
+      const p = toNdc(c.footX, c.maxRow + 1);
+      ndc.set(p.x, p.y);
+      ray.setFromCamera(ndc, camera);
+      if (!ray.ray.intersectPlane(floorPlane, foot)) continue;                         // above the horizon: far
+      c.dist = Math.hypot(foot.x - camera.position.x, foot.z - camera.position.z);
+      c.front = c.dist < dObj;
+    }
+    let kept = 0;
+    for (let i = 0; i < MASK * MASK; i++) {
+      const id = labels[i];
+      if (!id) continue;
+      if (comps[id].front) kept++;
+      else maskData[i * 4] = 0;
+    }
+    window.__occ = { status, dObj: +dObj.toFixed(2), kept, people: comps.slice(1).filter((c) => c.count >= MIN_BLOB).map((c) => ({ px: c.count, footRow: c.maxRow, dist: c.dist && +c.dist.toFixed(2), front: c.front })) };
+    return kept;
+  }
+
+  // Overridable for tests: (crop canvas) → confidence array of MASK×MASK, or null.
+  let segment = (img, ts) => {
+    let out = null;
+    segmenter.segmentForVideo(img, ts, (result) => {
+      const masks = result.confidenceMasks;
+      if (masks && masks.length) out = masks[masks.length - 1].getAsFloat32Array();
+    });
+    return out;
+  };
+
+  function update({ camera, renderer }) {
+    if (!mesh) return;
+    if ((status !== 'ready' && !window.__occTestSegment) || !state.rig || !anchor.placed || !anchor.group.visible) { mesh.visible = false; return; }
+    camera.updateMatrixWorld();
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+    const rect = sculptureRect(camera);
+    const video = cameraVideo();
+    if (!rect || !video) { mesh.visible = false; return; }
+    const now = performance.now();
+    if (now - lastRun < Math.max(1000 / MAX_FPS, costMs * 4)) return;   // keep showing the last mask
+    lastRun = now;
+
+    // The camera picture fills the canvas "cover"-style, centred; map the screen box into it.
+    const canvas = renderer.domElement;
+    const cw = canvas.width || canvas.clientWidth, ch = canvas.height || canvas.clientHeight;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const scale = Math.max(cw / vw, ch / vh);
+    const offX = (cw - vw * scale) / 2, offY = (ch - vh * scale) / 2;
+    const cx = ((rect.u0 + rect.u1) / 2) * cw, cy = ((rect.v0 + rect.v1) / 2) * ch;
+    let side = Math.min(Math.max((rect.u1 - rect.u0) * cw, (rect.v1 - rect.v0) * ch) * ROI_SCALE / scale, vw, vh);
+    side = Math.max(side, Math.min(vw, vh) * 0.1);
+    const sx = Math.min(Math.max((cx - offX) / scale - side / 2, 0), vw - side);
+    const sy = Math.min(Math.max((cy - offY) / scale - side / 2, 0), vh - side);
+    cropCtx.drawImage(video, sx, sy, side, side, 0, 0, MASK, MASK);
+
+    let conf = null;
+    try {
+      const ts = Math.max(Math.round(now), lastTs + 1);
+      lastTs = ts;
+      conf = (window.__occTestSegment || segment)(crop, ts);
+    } catch (e) {
+      console.warn('[occlusion] segmentation failed for this frame', e);
+    }
+    if (!conf) { mesh.visible = false; return; }
+    const n = Math.min(conf.length, MASK * MASK);
+    for (let i = 0; i < n; i++) maskData[i * 4] = conf[i] * 255;
+
+    // A mask pixel's centre on screen, as normalised device coordinates.
+    const toNdc = (mx, my) => ({
+      x: (((sx + (mx + 0.5) * side / MASK) * scale + offX) / cw) * 2 - 1,
+      y: 1 - (((sy + my * side / MASK) * scale + offY) / ch) * 2,
+    });
+    const kept = keepPeopleInFront(camera, toNdc);
+    maskTexture.needsUpdate = true;
+    material.uniforms.uRect.value.set(
+      (sx * scale + offX) / cw, (sy * scale + offY) / ch,
+      ((sx + side) * scale + offX) / cw, ((sy + side) * scale + offY) / ch,
+    );
+    mesh.visible = kept > 0;
+    const spent = performance.now() - now;
+    if (++runs > 2) costMs = costMs ? costMs * 0.8 + spent * 0.2 : spent;   // the first runs include start-up
+    if (window.__occ) { window.__occ.costMs = Math.round(costMs); window.__occ.at = now; }
+  }
+
+  return { attach, detach, update, status: () => status };
+})();
+
+// ---------------------------------------------------------------------------
 // 8th Wall session
 // ---------------------------------------------------------------------------
 let lastFrame = 0;
@@ -1019,6 +1286,7 @@ const arModule = {
       scene.add(debugCard);
     }
     lastFrame = performance.now();
+    occlusion.attach(scene);
     window.__xr = { scene, camera, renderer, anchor };
   },
   onUpdate: () => {
@@ -1027,6 +1295,7 @@ const arModule = {
     lastFrame = now;
     if (state.rig) state.rig.update(dt);
     updateFloor(XR8.Threejs.xrScene().camera);
+    occlusion.update(XR8.Threejs.xrScene());
   },
   onCameraStatusChange: ({ status }) => {
     if (DEBUG) (window.__ev ||= []).push(['camera', status]);
@@ -1138,6 +1407,7 @@ function stopAR() {
   resetPlacement();
   if (state.rig) anchor.group.remove(state.rig.root);
   if (debugCard) { debugCard.removeFromParent(); debugCard = null; }
+  occlusion.detach();
   ui.ar.hidden = true;
   ui.arUi.hidden = true;
   ui.xrCanvas.style.display = 'none';
@@ -1364,6 +1634,7 @@ async function loadCatalog() {
   if (!catalogUrl) {
     try {
       const cfg = await (await fetch('config.json', { cache: 'no-store' })).json();
+      state.config = cfg || {};
       catalogUrl = (cfg.catalogUrl || '').trim();
     } catch { /* no config: built-in list */ }
   }
