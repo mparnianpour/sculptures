@@ -1,0 +1,13 @@
+{
+  "name": "sculpture-catalog",
+  "private": true,
+  "type": "module",
+  "description": "GLB library for the web AR: drop models into /models and the catalog rebuilds itself.",
+  "scripts": {
+    "build": "node tools/build-catalog.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.50.0",
+    "three": "0.160.0"
+  }
+}

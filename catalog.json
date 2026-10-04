@@ -1,0 +1,49 @@
+{
+  "updated": "2026-10-04T06:31:33.783Z",
+  "models": [
+    {
+      "id": "sc3",
+      "title": "sc3",
+      "description": "Two forms turning slowly around one axis.",
+      "file": "models/sc3.glb?v=6f377de18f",
+      "thumbnail": "thumbs/sc3-6f377de18f.png",
+      "size": 1,
+      "animations": [
+        "Spin_RootAction"
+      ],
+      "triangles": 13402,
+      "megabytes": 1.06,
+      "extensions": []
+    },
+    {
+      "id": "steelsimorgh01",
+      "title": "Steel Simorgh",
+      "description": "Polished steel, three parts.",
+      "file": "models/steelsimorgh01.glb?v=ec90c16df9",
+      "thumbnail": "thumbs/steelsimorgh01-ec90c16df9.png",
+      "size": 1,
+      "animations": [],
+      "triangles": 143488,
+      "megabytes": 0.79,
+      "extensions": [
+        "EXT_meshopt_compression",
+        "KHR_mesh_quantization"
+      ]
+    },
+    {
+      "id": "treemozeh01",
+      "title": "Tree Mozeh",
+      "description": "Bark texture to come; shown in plain bark colour for now.",
+      "file": "models/treemozeh01.glb?v=22c8bcc8d8",
+      "thumbnail": "thumbs/treemozeh01-22c8bcc8d8.png",
+      "size": 1,
+      "animations": [],
+      "triangles": 144916,
+      "megabytes": 2.63,
+      "extensions": [
+        "EXT_meshopt_compression",
+        "KHR_mesh_quantization"
+      ]
+    }
+  ]
+}

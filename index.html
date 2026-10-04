@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sculpture library</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root { --fog:#d9dde0; --stone:#eef0f1; --graphite:#1f2327; --slate:#5a6269; --rule:#b6bdc2; --lapis:#2637c9; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fog:#15181b; --stone:#1f2327; --graphite:#e7eaec; --slate:#9ba4ab; --rule:#394046; --lapis:#7482ff; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--fog); color: var(--graphite); font: 17px/1.45 "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif; }
+    main { max-width: 64rem; margin: 0 auto; padding: 32px 16px 48px; }
+    h1 { font-size: clamp(2rem, 6vw, 2.75rem); line-height: 1.02; letter-spacing: -0.025em; margin: 0 0 12px; }
+    p { margin: 0; color: var(--slate); max-width: 52ch; }
+    .url { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    code { background: var(--stone); padding: 6px 10px; border-radius: 6px; font-size: 14px; overflow-wrap: anywhere; color: var(--graphite); }
+    button { font: inherit; font-size: 15px; border: 0; border-radius: 999px; padding: 6px 14px; background: var(--lapis); color: #fff; cursor: pointer; }
+    ul { list-style: none; padding: 0; margin: 32px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
+    li { background: var(--stone); border-radius: 2px; overflow: hidden; }
+    li img { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }
+    .meta { padding: 12px 14px 14px; }
+    .meta strong { display: block; font-weight: 600; }
+    .meta span { font-size: 14px; color: var(--slate); }
+    .empty { margin-top: 32px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Sculpture library</h1>
+    <p>These are the models visitors can choose in the AR page. Add, replace or remove files in the <strong>models</strong> folder of this repository and this list updates itself within a couple of minutes.</p>
+    <div class="url"><code id="catalog-url"></code><button id="copy">Copy address</button></div>
+    <ul id="list"></ul>
+    <p class="empty" id="empty" hidden>No models yet. Upload a .glb file to the models folder.</p>
+  </main>
+  <script>
+    const url = new URL('catalog.json', location.href).href;
+    document.getElementById('catalog-url').textContent = url;
+    document.getElementById('copy').onclick = async (e) => {
+      try { await navigator.clipboard.writeText(url); e.target.textContent = 'Copied'; } catch { /* ignore */ }
+    };
+    fetch('catalog.json?t=' + Date.now(), { cache: 'no-store' }).then((r) => r.json()).then((cat) => {
+      const list = document.getElementById('list');
+      if (!cat.models.length) document.getElementById('empty').hidden = false;
+      for (const m of cat.models) {
+        const li = document.createElement('li');
+        const img = document.createElement('img');
+        img.src = m.thumbnail; img.alt = m.title; img.loading = 'lazy';
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const t = document.createElement('strong'); t.textContent = m.title;
+        const d = document.createElement('span');
+        d.textContent = `${m.megabytes} MB, ${m.animations.length ? 'animated' : 'still'}`;
+        meta.append(t, d);
+        li.append(img, meta);
+        list.append(li);
+      }
+    });
+  </script>
+</body>
+</html>
