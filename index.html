@@ -27,6 +27,8 @@
     .meta strong { display: block; font-weight: 600; }
     .meta span { font-size: 14px; color: var(--slate); }
     .empty { margin-top: 32px; }
+    .open { margin-top: 14px; }
+    .open a { color: var(--lapis); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -34,6 +36,7 @@
     <h1>Sculpture library</h1>
     <p>These are the models visitors can choose in the AR page. Add, replace or remove files in the <strong>models</strong> folder of this repository and this list updates itself within a couple of minutes.</p>
     <div class="url"><code id="catalog-url"></code><button id="copy">Copy address</button></div>
+    <p class="open"><a href="ar/">Open the AR page</a></p>
     <ul id="list"></ul>
     <p class="empty" id="empty" hidden>No models yet. Upload a .glb file to the models folder.</p>
   </main>
