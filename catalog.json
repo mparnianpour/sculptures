@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-04T21:17:17.557Z",
+  "updated": "2026-10-05T18:13:03.940Z",
   "models": [
     {
       "id": "sc3",
@@ -58,6 +58,21 @@
       "extensions": [
         "EXT_meshopt_compression",
         "KHR_materials_anisotropy",
+        "KHR_mesh_quantization"
+      ]
+    },
+    {
+      "id": "aks",
+      "title": "Aks",
+      "description": "",
+      "file": "models/aks.glb?v=eb3aaff2dd",
+      "thumbnail": "thumbs/aks-eb3aaff2dd.png",
+      "size": 1,
+      "animations": [],
+      "triangles": 8192,
+      "megabytes": 1.97,
+      "extensions": [
+        "EXT_meshopt_compression",
         "KHR_mesh_quantization"
       ]
     },
