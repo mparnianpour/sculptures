@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-05T18:13:03.940Z",
+  "updated": "2026-10-07T10:28:54.394Z",
   "models": [
     {
       "id": "sc3",
@@ -71,6 +71,41 @@
       "animations": [],
       "triangles": 8192,
       "megabytes": 1.97,
+      "extensions": [
+        "EXT_meshopt_compression",
+        "KHR_mesh_quantization"
+      ]
+    },
+    {
+      "id": "pardeh",
+      "title": "Pardeh",
+      "description": "A curtain moving in the wind",
+      "file": "models/pardeh.glb?v=c99ebb96af",
+      "thumbnail": "thumbs/pardeh-c99ebb96af.png",
+      "size": 1,
+      "animations": [
+        "PardehWind"
+      ],
+      "triangles": 2048,
+      "megabytes": 0.7,
+      "extensions": [
+        "EXT_meshopt_compression",
+        "KHR_mesh_quantization"
+      ]
+    },
+    {
+      "id": "orbit",
+      "title": "Orbit",
+      "description": "",
+      "file": "models/orbit.glb?v=24e07e095a",
+      "thumbnail": "thumbs/orbit-24e07e095a.png",
+      "size": 1,
+      "animations": [
+        "EmptyAction",
+        "CubeAction.001"
+      ],
+      "triangles": 12,
+      "megabytes": 0.01,
       "extensions": [
         "EXT_meshopt_compression",
         "KHR_mesh_quantization"
